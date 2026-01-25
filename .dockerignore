@@ -1,0 +1,7 @@
+tmp
+bin
+*.log
+.git
+.air.toml
+.pre-commit-config.yaml
+Dockerfile
