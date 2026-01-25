@@ -11,6 +11,9 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # ==========================================
+  # TRABAJO 1: Calidad y Pruebas (Siempre corre)
+  # ==========================================
   test-and-lint:
     runs-on: ubuntu-latest
     steps:
@@ -42,10 +45,14 @@ jobs:
 
       - name: Display Coverage Summary
         run: go tool cover -func=coverage.out
-  
+
+  # ==========================================
+  # TRABAJO 2: Docker Build, Test & Push
+  # ==========================================
   build-and-push-docker:
     needs: test-and-lint
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Solo sube la imagen si es un PUSH (merge) a main o develop
+    # En PRs solo construye y testea el contenedor sin subirlo
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -58,37 +65,55 @@ jobs:
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login al GitHub Container Registry
+      - name: Login to GitHub Container Registry
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Generar tags automáticos (sha y latest)
-      - name: Extraer metadata
+      - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=sha,prefix=sha-
-            type=raw,value=latest,enable=true
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
-      - name: Build and Push Docker Image
-        uses: docker/build-push-action@v5
+      # Construye y carga localmente para testear (Smoke Test)
+      - name: Build and load
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Test container (Smoke Test)
+        run: |
+          # Usamos el primer tag generado para la prueba
+          IMAGE_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+          docker run -d --name test-api -p 3000:3000 $IMAGE_TAG
+          
+          # Esperar a que Fiber responda en /ping
+          timeout 30s bash -c 'until curl -f http://localhost:3000/ping; do sleep 2; done' || (docker logs test-api && exit 1)
+          
+          docker stop test-api && docker rm test-api
+
+      # Si no es PR y los pasos anteriores pasaron, hacemos el Push final
+      - name: Push Docker image
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-
-      - name: Testear contenedor (Smoke Test)
-        run: |
-          IMAGE_TAG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-          docker run -d --name test-api -p 3000:3000 $IMAGE_TAG
-          # Esperar a que el servidor de Go/Fiber levante
-          sleep 10
-          # Probar el endpoint que creaste
-          curl -f http://localhost:3000/ping || (docker logs test-api && exit 1)
-          docker stop test-api && docker rm test-api
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
