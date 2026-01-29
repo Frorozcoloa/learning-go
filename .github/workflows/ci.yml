@@ -1,4 +1,4 @@
-name: CI/CD Aroma Argelino
+name: Continuous Integration
 
 on:
   push:

@@ -1,0 +1,48 @@
+name: Continuous Deployment
+
+on:
+  workflow_run:
+    # 1. Escucha al nombre exacto de tu otro workflow
+    workflows: ["Continuous Integration"]
+    types:
+      - completed
+    branches: [main, develop]
+
+jobs:
+  deploy:
+    # 2. Solo se ejecuta si el CI terminó con éxito (success)
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: [self-hosted, linux, learning-go]
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Parar y eliminar contenedor anterior
+        run: |
+          docker stop aroma-api || true
+          docker rm aroma-api || true
+
+      - name: Construir imagen de Docker
+        run: |
+          # Construimos localmente en tu máquina 'rox'
+          docker build -t aroma-api:latest .
+
+      - name: Levantar nuevo contenedor
+        run: |
+          docker run -d \
+            --name aroma-api \
+            -p 3000:3000 \
+            --restart unless-stopped \
+            aroma-api:latest
+
+      - name: Verificar salud de la aplicación
+        run: |
+          sleep 10
+          # Verificamos que el servidor de Go responda
+          curl -f http://localhost:3000/ping
+
+      - name: Limpiar imágenes antiguas
+        run: |
+          # Evita que el disco de tu server se llene
+          docker image prune -f
